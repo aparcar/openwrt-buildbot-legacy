@@ -19,6 +19,7 @@ RUN apt-get update && \
 		pwgen \
 		python3-pip \
 		signify-openbsd \
+		unzip \
 		wget \
 	&& apt-get clean \
 	&& localedef -i en_US -c -f UTF-8 \

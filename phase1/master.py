@@ -1,10 +1,8 @@
 # -*- python -*-
 # ex: set filetype=python:
 
-from datetime import timedelta
-from buildbot.plugins import *
-from buildbot.plugins import changes
-from buildbot.plugins import util, steps
+from buildbot.plugins import changes, worker, schedulers
+from buildbot.plugins import util
 from buildbot.process import properties
 from buildbot.process.factory import BuildFactory
 from buildbot.process.properties import Interpolate
@@ -16,144 +14,101 @@ from buildbot.steps.transfer import FileDownload
 from buildbot.steps.transfer import FileUpload
 from buildbot.steps.transfer import StringDownload
 from configparser import ConfigParser
+from datetime import timedelta
 from os import getenv
 from pathlib import Path
+import base64
 import os
-import subprocess
 import re
-
+import subprocess
 
 # Load .ini config file so it is easier to configure the buildbot
 ini = ConfigParser()
 ini.read(getenv("BUILDMASTER_CONFIG", "./config.ini"))
-
-# This is a sample buildmaster config file. It must be installed as
-# 'master.cfg' in your buildmaster's base directory.
-
-# This is the dictionary that the buildmaster pays attention to. We also use
-# a shorter alias to save typing.
 c = BuildmasterConfig = {}
 
-# TODO set this to "full" to make the buildbot devs happy
-c["buildbotNetUsageData"] = None
-
-# Reduce amount of backlog data
+c["buildbotNetUsageData"] = "full"
 c["configurators"] = [
     util.JanitorConfigurator(logHorizon=timedelta(weeks=4), hour=12, dayOfWeek=6)
 ]
+c["services"] = []
+c["title"] = ini.get("general", "title")
+c["titleURL"] = ini.get("general", "title_url")
+c["buildbotURL"] = ini.get("phase1", "buildbot_url")
+c["www"] = dict(
+    port=8010, plugins=dict(waterfall_view={}, console_view={}, grid_view={})
+)
 
-####### WORKERS
+authz = util.Authz(
+    allowRules=[util.AnyControlEndpointMatcher(role="admins")],
+    roleMatchers=[util.RolesFromUsername(roles=["admins"], usernames=["status"])],
+)
+auth = util.UserPasswordAuth(
+    {ini.get("phase1", "status_user"): ini.get("phase1", "status_password")}
+)
+c["www"]["auth"] = auth
+c["www"]["authz"] = authz
+c["db"] = {"db_url": "sqlite:///state.sqlite"}
 
-# The 'workers' list defines the set of recognized workers. Each element is
-# a Worker object, specifying a unique worker name and password.  The same
-# worker name and password must be configured on the worker.
 c["workers"] = []
 NetLocks = dict()
 
 for section in ini.sections():
     if section.startswith("worker "):
-        if (
-            ini.has_option(section, "name")
-            and ini.has_option(section, "password")
-            and (
-                not ini.has_option(section, "phase")
-                or ini.getint(section, "phase") == 1
-            )
-        ):
-            sl_props = {
-                "dl_lock": None,
-                "ul_lock": None,
-                "do_cleanup": False,
-                "max_builds": 1,
-                "shared_wd": False,
-            }
-            name = ini.get(section, "name")
-            password = ini.get(section, "password")
-            max_builds = 1
-            if ini.has_option(section, "builds"):
-                max_builds = ini.getint(section, "builds")
-                sl_props["max_builds"] = max_builds
-                if max_builds == 1:
-                    sl_props["shared_wd"] = True
-            if ini.has_option(section, "cleanup"):
-                sl_props["do_cleanup"] = ini.getboolean(section, "cleanup")
-            if ini.has_option(section, "dl_lock"):
-                lockname = ini.get(section, "dl_lock")
-                sl_props["dl_lock"] = lockname
-                if lockname not in NetLocks:
-                    NetLocks[lockname] = util.MasterLock(lockname)
-            if ini.has_option(section, "ul_lock"):
-                lockname = ini.get(section, "dl_lock")
-                sl_props["ul_lock"] = lockname
-                if lockname not in NetLocks:
-                    NetLocks[lockname] = util.MasterLock(lockname)
-            if ini.has_option(section, "shared_wd"):
-                shared_wd = ini.getboolean(section, "shared_wd")
-                sl_props["shared_wd"] = shared_wd
-                if shared_wd and (max_builds != 1):
-                    raise ValueError("max_builds must be 1 with shared workdir!")
-            c["workers"].append(
-                worker.Worker(
-                    name, password, max_builds=max_builds, properties=sl_props
-                )
-            )
+        name = ini.get(section, "name", fallback=None)
+        password = ini.get(section, "password", fallback=None)
 
-# 'protocols' contains information about protocols which master will use for
-# communicating with workers. You must define at least 'port' option that workers
-# could connect to your master with this protocol.
-# 'port' must match the value configured into the workers (with their
-# --master option)
-#
-worker_port = 9989
-if ini.has_option("phase1", "port"):
-    worker_port = ini.getint("phase1", "port")
-c["protocols"] = {"pb": {"port": worker_port}}
+        if not (name and password):
+            # Every worker requires a name and a password at least
+            continue
+        if not ini.getint(section, "phase", fallback=1) == 1:
+            # Only use worker with phase undefined or phase 1
+            continue
 
-# coalesce builds
+        p = {
+            "dl_lock": ini.get(section, "dl_lock", fallback=None),
+            "ul_lock": ini.get(section, "ul_lock", fallback=None),
+            "do_cleanup": ini.getboolean(section, "cleanup", fallback=False),
+            "max_builds": ini.getint(section, "builds", fallback=1),
+            "shared_wd": ini.getboolean(section, "shared_wd", fallback=False),
+        }
+
+        # Parrallel builds can where the working directory
+        if p["max_builds"] == 1:
+            p["shared_wd"] = True
+
+        if p["dl_lock"] and p["dl_lock"] not in NetLocks:
+            NetLocks[p["dl_lock"]] = util.MasterLock(p["dl_lock"])
+
+        if p["ul_lock"] and p["ul_lock"] not in NetLocks:
+            NetLocks[p["ul_lock"]] = util.MasterLock(p["ul_lock"])
+
+        c["workers"].append(
+            worker.Worker(name, password, max_builds=p["max_builds"], properties=p)
+        )
+
+c["protocols"] = {"pb": {"port": ini.getint("phase1", "port", fallback=9989)}}
 c["collapseRequests"] = True
 
 work_dir = os.path.abspath(ini.get("general", "workdir") or ".")
-workdir = Path(ini.get("general", "workdir") or ".")
+workdir = Path(ini.get("general", "workdir") or ".").absolute()
 scripts_dir = os.path.abspath("../scripts")
-tree_expire = 0
-other_builds = 0
-cc_version = None
 
-cc_command = "gcc"
-cxx_command = "g++"
-
-config_seed = ""
-
-git_ssh = False
-git_ssh_key = None
-
-if ini.has_option("phase1", "expire"):
-    tree_expire = ini.getint("phase1", "expire")
-
-if ini.has_option("phase1", "other_builds"):
-    other_builds = ini.getint("phase1", "other_builds")
-
-if ini.has_option("phase1", "cc_version"):
-    cc_version = ini.get("phase1", "cc_version").split()
+cc_version = ini.get("phase1", "cc_version")
+if cc_version:
+    cc_version = cc_version.split()
     if len(cc_version) == 1:
         cc_version = ["eq", cc_version[0]]
 
-if ini.has_option("general", "git_ssh"):
-    git_ssh = ini.getboolean("general", "git_ssh")
-
-if ini.has_option("general", "git_ssh_key"):
-    git_ssh_key = ini.get("general", "git_ssh_key")
-else:
-    git_ssh = False
-
-if ini.has_option("phase1", "config_seed"):
-    config_seed = ini.get("phase1", "config_seed")
+tree_expire = ini.getint("phase1", "expire", fallback=0)
+other_builds = ini.getint("phase1", "other_builds", fallback=0)
+git_ssh = ini.getboolean("general", "git_ssh", fallback=False)
+git_ssh_key = ini.get("general", "git_ssh_key", fallback=None)
+config_seed = ini.get("phase1", "config_seed", fallback="")
+enable_kmod_archive = ini.getboolean("phase1", "enable_kmod_archive", fallback=True)
 
 repo_url = ini.get("repo", "url")
-repo_branch = "master"
-
-if ini.has_option("repo", "branch"):
-    repo_branch = ini.get("repo", "branch")
+repo_branch = ini.get("repo", "branch", fallback="master")
 
 rsync_bin_url = ini.get("rsync", "binary_url")
 rsync_bin_key = ini.get("rsync", "binary_password")
@@ -166,26 +121,20 @@ rsync_src_url = None
 rsync_src_key = None
 rsync_src_defopts = ["-v", "-4", "--timeout=120"]
 
-if ini.has_option("rsync", "source_url"):
-    rsync_src_url = ini.get("rsync", "source_url")
-    rsync_src_key = ini.get("rsync", "source_password")
-
+rsync_src_url = ini.get("rsync", "source_url")
+rsync_src_key = ini.get("rsync", "source_password")
+rsync_src_defopts = ["-v", "-4", "--timeout=120"]
+if rsync_src_url:
     if rsync_src_url.find("::") > 0 or rsync_src_url.find("rsync://") == 0:
         rsync_src_defopts += ["--contimeout=20"]
 
-usign_key = None
-usign_comment = "untrusted comment: " + repo_branch.replace("-", " ").title() + " key"
+usign_key = ini.get("usign", "key", fallback=None)
+usign_comment = ini.get(
+    "usign",
+    "comment",
+    fallback="untrusted comment: " + repo_branch.replace("-", " ").title() + " key",
+)
 
-if ini.has_option("usign", "key"):
-    usign_key = ini.get("usign", "key")
-
-if ini.has_option("usign", "comment"):
-    usign_comment = ini.get("usign", "comment")
-
-enable_kmod_archive = True
-
-
-# find targets
 targets = []
 
 source_git = workdir / "source.git"
@@ -196,7 +145,7 @@ if not source_git.is_dir():
         ["git", "clone", "--depth=1", "--branch=" + repo_branch, repo_url, source_git]
     )
 else:
-    subprocess.call(["git", "pull"], cwd=work_dir + "/source.git")
+    subprocess.call(["git", "pull"], cwd=source_git)
 
 findtargets = subprocess.run(
     [scripts_dir + "/dumpinfo.pl", "targets"],
@@ -218,21 +167,15 @@ findtargets = subprocess.run(
 for line in findtargets.stdout.splitlines():
     targets.append(line.strip().split(" ")[0])
 
-# the 'change_source' setting tells the buildmaster how it should find out
-# about source code changes.  Here we point to the buildbot clone of pyflakes.
-
 c["change_source"] = []
 c["change_source"].append(
     changes.GitPoller(
-        repo_url, workdir=work_dir + "/work.git", branch=repo_branch, pollinterval=300
+        repo_url,
+        workdir=work_dir + "/work.git",
+        branches=[repo_branch],
+        pollinterval=300,
     )
 )
-
-####### SCHEDULERS
-
-# Configure the Schedulers, which decide how to react to incoming changes.  In this
-# case, just kick off a 'runtests' build
-#
 
 c["schedulers"] = []
 c["schedulers"].append(
@@ -244,12 +187,6 @@ c["schedulers"].append(
     )
 )
 c["schedulers"].append(schedulers.ForceScheduler(name="force", builderNames=targets))
-
-####### BUILDERS
-
-# The 'builders' list defines the Builders, which tell Buildbot how to perform a build:
-# what steps, and which workers can execute them.  Note that any particular build will
-# only take place on one worker.
 
 factory = util.BuildFactory()
 # check out the source
@@ -264,30 +201,11 @@ c["builders"].append(
     util.BuilderConfig(name="runtests", workernames=["example-worker"], factory=factory)
 )
 
-####### BUILDBOT SERVICES
-
-# 'services' is a list of BuildbotService items like reporter targets. The
-# status of each build will be pushed to these targets. buildbot/reporters/*.py
-# has a variety to choose from, like IRC bots.
 
 c["services"] = []
-
-####### PROJECT IDENTITY
-
-# the 'title' string will appear at the top of this buildbot installation's
-# home pages (linked to the 'titleURL').
-
 c["title"] = ini.get("general", "title")
 c["titleURL"] = ini.get("general", "title_url")
-
-# the 'buildbotURL' string should point to the location where the buildbot's
-# internal web server is visible. This typically uses the port number set in
-# the 'www' entry below, but with an externally-visible host name which the
-# buildbot cannot figure out without some help.
-
 c["buildbotURL"] = ini.get("phase1", "buildbot_url")
-
-# minimalistic config to activate new web UI
 c["www"] = dict(
     port=8010, plugins=dict(waterfall_view={}, console_view={}, grid_view={})
 )
@@ -301,23 +219,7 @@ auth = util.UserPasswordAuth(
 )
 c["www"]["auth"] = auth
 c["www"]["authz"] = authz
-
-####### DB URL
-
-c["db"] = {
-    # This specifies what database buildbot uses to store its state.
-    # It's easy to start with sqlite, but it's recommended to switch to a dedicated
-    # database, such as PostgreSQL or MySQL, for use in production environments.
-    # http://docs.buildbot.net/current/manual/configuration/global.html#database-specification
-    "db_url": "sqlite:///state.sqlite"
-}
-
-###BUILDERS
-
-# The 'builders' list defines the Builders, which tell Buildbot how to perform a build:
-# what steps, and which workers can execute them.  Note that any particular build will
-# only take place on one worker.
-
+c["db"] = {"db_url": "sqlite:///state.sqlite"}
 
 CleanTargetMap = [
     ["tools", "tools/clean"],
@@ -374,7 +276,7 @@ def IsGitCleanRequested(step):
 
 def IsTaggingRequested(step):
     val = step.getProperty("tag")
-    if val and re.match("^[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?$", val):
+    if val and re.match(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?$", val):
         return True
     else:
         return False
@@ -389,7 +291,7 @@ def IsNoMasterBuild(step):
 
 
 def GetBaseVersion():
-    if re.match("^[^-]+-[0-9]+\.[0-9]+$", repo_branch):
+    if re.match(r"^[^-]+-[0-9]+\.[0-9]+$", repo_branch):
         return repo_branch.split("-")[1]
     else:
         return "master"
@@ -399,7 +301,7 @@ def GetBaseVersion():
 def GetVersionPrefix(props):
     basever = GetBaseVersion()
     if props.hasProperty("tag") and re.match(
-        "^[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?$", props["tag"]
+        r"^[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?$", props["tag"]
     ):
         return "%s/" % props["tag"]
     elif basever != "master":
@@ -478,7 +380,7 @@ def MakeEnv(overrides=None, tryccache=False):
         env["CC"] = env["CCC"]
         env["CXX"] = env["CCXX"]
         env["CCACHE"] = ""
-    if overrides is not None:
+    if overrides:
         env.update(overrides)
     return env
 
@@ -488,7 +390,7 @@ def NetLockDl(props):
     lock = None
     if props.hasProperty("dl_lock"):
         lock = NetLocks[props["dl_lock"]]
-    if lock is not None:
+    if lock:
         return [lock.access("exclusive")]
     else:
         return []
@@ -499,7 +401,7 @@ def NetLockUl(props):
     lock = None
     if props.hasProperty("ul_lock"):
         lock = NetLocks[props["ul_lock"]]
-    if lock is not None:
+    if lock:
         return [lock.access("exclusive")]
     else:
         return []
@@ -515,10 +417,7 @@ def usign_sec_2_pub(seckey: str, comment: str = "untrusted comment: secret key")
     Returns:
         str: The public key
     """
-    try:
-        seckey = base64.b64decode(seckey)
-    except:
-        return None
+    seckey = base64.b64decode(seckey)
 
     return "{}\n{}".format(
         re.sub(r"\bsecret key$", "public key", comment),
@@ -576,7 +475,7 @@ class IfBuiltinShellCommand(ShellCommand):
 
     def setupEnvironment(self, cmd):
         workerEnv = self.workerEnvironment
-        if workerEnv is None:
+        if not workerEnv:
             workerEnv = {}
         changedFiles = {}
         for request in self.build.requests:
@@ -639,8 +538,8 @@ for target in targets:
             command=[
                 "../findbin.pl",
                 "gcc",
-                cc_version[0] if cc_version is not None else "",
-                cc_version[1] if cc_version is not None else "",
+                cc_version[0] if cc_version else "",
+                cc_version[1] if cc_version else "",
             ],
             haltOnFailure=True,
         )
@@ -654,8 +553,8 @@ for target in targets:
             command=[
                 "../findbin.pl",
                 "g++",
-                cc_version[0] if cc_version is not None else "",
-                cc_version[1] if cc_version is not None else "",
+                cc_version[0] if cc_version else "",
+                cc_version[1] if cc_version else "",
             ],
             haltOnFailure=True,
         )
@@ -876,7 +775,7 @@ for target in targets:
     )
 
     # Git SSH
-    if git_ssh:
+    if git_ssh and git_ssh_key:
         factory.addStep(
             StringDownload(
                 name="dlgitclonekey",
@@ -909,7 +808,7 @@ for target in targets:
                         cwd=GetCwd,
                     )
                 }
-                if git_ssh
+                if git_ssh and git_ssh_key
                 else {},
             ),
             haltOnFailure=True,
@@ -917,7 +816,7 @@ for target in targets:
     )
 
     # Git SSH
-    if git_ssh:
+    if git_ssh and git_ssh_key:
         factory.addStep(
             ShellCommand(
                 name="rmfeedsconf",
@@ -939,7 +838,7 @@ for target in targets:
     )
 
     # seed config
-    if config_seed is not None:
+    if config_seed:
         factory.addStep(
             StringDownload(
                 name="dlconfigseed",
@@ -955,7 +854,7 @@ for target in targets:
             name="newconfig",
             description="Seeding .config",
             command="printf 'CONFIG_TARGET_%s=y\\nCONFIG_TARGET_%s_%s=y\\nCONFIG_SIGNED_PACKAGES=%s\\n' >> .config"
-            % (ts[0], ts[0], ts[1], "y" if usign_key is not None else "n"),
+            % (ts[0], ts[0], ts[1], "y" if usign_key else "n"),
         )
     )
 
@@ -1005,7 +904,7 @@ for target in targets:
     )
 
     # install build key
-    if usign_key is not None:
+    if usign_key:
         factory.addStep(
             StringDownload(
                 name="dlkeybuildpub",
@@ -1338,7 +1237,7 @@ for target in targets:
         )
 
     # sign
-    if ini.has_option("gpg", "key") or usign_key is not None:
+    if ini.has_option("gpg", "key") or usign_key:
         factory.addStep(
             MasterShellCommand(
                 name="signprepare",
@@ -1634,7 +1533,7 @@ for target in targets:
             )
         )
 
-    if rsync_src_url is not None:
+    if rsync_src_url:
         factory.addStep(
             ShellCommand(
                 name="sourcelist",
