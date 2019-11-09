@@ -26,4 +26,6 @@ chown "${SHARE_UID:-1000}:${SHARE_GID:-1000}" /data
 
 rm -f /tmp/rsyncd.pid
 
-exec /usr/bin/rsync --daemon --no-detach --config=/rsyncd.conf --log-file=/dev/stdout --dparam=pidfile=/tmp/rsyncd.pid "$@"
+exec /usr/bin/rsync \
+	--daemon --no-detach --config=/rsyncd.conf \
+	--log-file=/dev/stdout --dparam=pidfile=/tmp/rsyncd.pid "$@"

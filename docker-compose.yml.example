@@ -1,0 +1,60 @@
+version: '3'
+
+services:
+  nginx:
+    image: umputun/nginx-le:latest
+    hostname: nginx
+    volumes:
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/service.conf:/etc/nginx/service.conf
+      - ./nginx/stream.conf:/etc/nginx/stream.d/stream.conf
+      - ./build/output:/data
+    ports:
+      - "80:80"
+      - "443:443"
+      - '9989:9989'
+    environment:
+      - TZ=America/Chicago
+      - LETSENCRYPT=true
+      - LE_EMAIL=mail@aparcar.org
+      - LE_FQDN=phase1.aparcar.org
+
+  rsync-server:
+    build:
+      context: .
+      dockerfile: ./rsync/Dockerfile
+    image: openwrtorg/rsync-server:latest
+    environment:
+      SHARE_USER: upload
+      SHARE_PASSWORD: secret
+    volumes:
+      - './build/output:/data'
+    ports:
+      - "873:873"
+
+  buildmaster-phase1:
+    build:
+      context: .
+      dockerfile: master/Dockerfile
+    image: openwrtorg/buildmaster:latest
+    environment:
+      BUILDMASTER_PHASE: 1
+      BUILDMASTER_CONFIG: ./config.ini
+    volumes:
+      - './phase1/config.ini:/master/config.ini'
+      - './build/master-phase1:/master'
+      - './phase1:/phase1'
+
+  buildworker-phase1:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: openwrtorg/buildworker:latest
+    environment:
+      BUILDWORKER_MASTER: buildmaster-phase1:9989
+      BUILDWORKER_NAME: buildworker-phase1
+      BUILDWORKER_PASSWORD: secret
+    links:
+      - 'buildmaster-phase1'
+    volumes:
+      - './build/worker-phase1:/builder'

@@ -1,23 +1,18 @@
 [general]
 title = OpenWrt Project
 title_url = http://openwrt.org/
-workdir = /buildbot
+workdir = .
 
 [phase1]
-buildbot_url = http://phase1.builds.openwrt.org/
+buildbot_url = http://localhost:8010/
 status_bind = tcp:8010:interface=127.0.0.1
-status_user = example
-status_password = example
+status_user = status
+status_password = secret
 expire = 1209600
 port = 9989
-cc_version = le 4.9
+cc_version = gt 4.9
 git_ssh = true
-git_ssh_key = -----BEGIN RSA PRIVATE KEY-----
-	MIIEpAIBAAKCAQEAuCJwo6OmrRDxcGfsMgBhq0vdzp2ZIdqnedFH8u6tVYLt9WDU
-	...
-	mHzkh8Uv4OAWTjiLGycbXa0/31hu9PCeNzYmjjrp8tcGjsiJJFxydgS+wc0i2UPV
-	nSI+JbmAAF9vw6gj2i+Hqx7UloRd0tEv/leX354T5lO06LMiNhvN9g==
-	-----END RSA PRIVATE KEY-----
+git_ssh_key =
 config_seed = # Seed configuration
 	CONFIG_BUILDBOT=y
 	CONFIG_DEVEL=y
@@ -25,47 +20,28 @@ config_seed = # Seed configuration
 	CONFIG_KERNEL_KALLSYMS=y
 	CONFIG_AUTOREMOVE=y
 
-[irc]
-host = irc.freenode.net
-port = 6667
-channel = #example-channel
-nickname = example-builder
-password = example
-
 [repo]
 url = https://git.openwrt.org/openwrt/openwrt.git
 branch = master
 
 [rsync]
-binary_url = user@example.org::upload-binary
-binary_password = example
+binary_url = upload@phase1.aparcar.org::data/
+binary_password = secret
 source_url = user@example.org::upload-sources
 source_password = example2
 
 [gpg]
-key = -----BEGIN PGP PRIVATE KEY BLOCK-----
-	Version: GnuPG v2
+key =
 
-	mQGNBFX4kxkBDACcTUVUl6zbn4r9tDap0/aCpcK9MO+HPatS7p2aBGY51kh78Ixr
-	...
-	HwHLaFTMvYFY7WJDwA==
-	-----END PGP PRIVATE KEY BLOCK-----
 passphrase = secret password
 comment = Unattended build signature
 
 [usign]
-key = RWRCSwAAA...OihABfuLvGRVfVaJ6wLf0=
-comment = Unattended build signature
+key =
+comment =
 
-[slave 1]
+[worker 1]
 phase = 1
-name = example-slave-1
-password = example
-builds = 3
-
-[slave 2]
-phase = 1
-name = example-slave-2
-password = example2
+name = buildworker-phase1
+password = secret
 builds = 1
-cleanup = 1
