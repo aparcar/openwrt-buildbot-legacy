@@ -135,7 +135,15 @@ usign_comment = ini.get(
     fallback="untrusted comment: " + repo_branch.replace("-", " ").title() + " key",
 )
 
-targets = []
+
+if ini.has_section("external_targets"):
+    external_targets = ini.options("external_targets")
+else:
+    external_targets = {}
+
+external_targets_only = ini.getboolean(
+    "phase1", "external_targets_only", fallback=False
+)
 
 source_git = workdir / "source.git"
 source_git.parent.mkdir(parents=True, exist_ok=True)
@@ -147,25 +155,42 @@ if not source_git.is_dir():
 else:
     subprocess.call(["git", "pull"], cwd=source_git)
 
-findtargets = subprocess.run(
-    [scripts_dir + "/dumpinfo.pl", "targets"],
-    capture_output=True,
-    text=True,
-    cwd=work_dir + "/source.git",
+if external_targets:
+    feeds_conf = (source_git / "feeds.conf.default").read_text()
+
+    for external_target in external_targets:
+        feeds_conf += "{1} {0} {2}\n".format(
+            external_target, *ini.get("external_targets", external_target).split(",")
+        )
+
+    (source_git / "feeds.conf").write_text(feeds_conf)
+
+    subprocess.call(
+        ["scripts/feeds", "update", " ".join(external_targets)], cwd=source_git
+    )
+    subprocess.call(
+        ["scripts/feeds", "install", " ".join(external_targets)], cwd=source_git
+    )
+
+targets_available = list(
+    map(
+        lambda t: t.split()[0],
+        subprocess.run(
+            [scripts_dir + "/dumpinfo.pl", "targets"],
+            cwd=source_git,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines(),
+    )
 )
 
-# the output of dumpinfo.pl looks like this:
-# ath79/tiny mips_24kc
-# bcm53xx/generic arm_cortex-a9
-# brcm2708/bcm2708 arm_arm1176jzf-s_vfp
-# brcm2708/bcm2709 arm_cortex-a7_neon-vfpv4
-# brcm2708/bcm2710 aarch64_cortex-a53
-# brcm2708/bcm2711 aarch64_cortex-a72
-# brcm47xx/generic mipsel_mips32
-# brcm47xx/legacy mipsel_mips32
-# ...
-for line in findtargets.stdout.splitlines():
-    targets.append(line.strip().split(" ")[0])
+if not external_targets_only:
+    targets = targets_available
+else:
+    targets = list(
+        filter(lambda t: t.startswith(tuple(external_targets)), targets_available)
+    )
+
 
 c["change_source"] = []
 c["change_source"].append(
@@ -774,6 +799,16 @@ for target in targets:
         )
     )
 
+    if external_targets:
+        factory.addStep(
+            FileDownload(
+                name="Transfer master feeds.conf to worker feeds.conf.default",
+                mastersrc=source_git / "feeds.conf",
+                workerdest="feeds.conf.default",
+                haltOnFailure=True,
+            )
+        )
+
     # Git SSH
     if git_ssh and git_ssh_key:
         factory.addStep(
@@ -836,6 +871,15 @@ for target in targets:
             haltOnFailure=True,
         )
     )
+    for external_target in external_targets:
+        factory.addStep(
+            ShellCommand(
+                name=f"Install external target {external_target}",
+                command=["./scripts/feeds", "install", external_target],
+                env=MakeEnv(tryccache=True),
+                haltOnFailure=True,
+            )
+        )
 
     # seed config
     if config_seed:
