@@ -897,8 +897,7 @@ for target in targets:
         ShellCommand(
             name="newconfig",
             description="Seeding .config",
-            command="printf 'CONFIG_TARGET_%s=y\\nCONFIG_TARGET_%s_%s=y\\nCONFIG_SIGNED_PACKAGES=%s\\n' >> .config"
-            % (ts[0], ts[0], ts[1], "y" if usign_key else "n"),
+            command=f"printf 'CONFIG_TARGET_{ts[0]}=y\\nCONFIG_TARGET_{ts[0]}_{ts[1]}=y\\n' >> .config",
         )
     )
 
@@ -952,27 +951,10 @@ for target in targets:
         factory.addStep(
             StringDownload(
                 name="dlkeybuildpub",
+                deescription="Download public usign key",
                 s=usign_sec_2_pub(usign_key, usign_comment),
                 workerdest="key-build.pub",
-                mode=0o600,
-            )
-        )
-
-        factory.addStep(
-            StringDownload(
-                name="dlkeybuild",
-                s="# fake private key",
-                workerdest="key-build",
-                mode=0o600,
-            )
-        )
-
-        factory.addStep(
-            StringDownload(
-                name="dlkeybuilducert",
-                s="# fake certificate",
-                workerdest="key-build.ucert",
-                mode=0o600,
+                mode=0o644,
             )
         )
 
