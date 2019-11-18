@@ -212,21 +212,6 @@ c["schedulers"].append(
     )
 )
 c["schedulers"].append(schedulers.ForceScheduler(name="force", builderNames=targets))
-
-factory = util.BuildFactory()
-# check out the source
-factory.addStep(
-    steps.Git(repourl="git://github.com/buildbot/hello-world.git", mode="incremental")
-)
-# run the tests (note that this will require that 'trial' is installed)
-factory.addStep(steps.ShellCommand(command=["trial", "hello"], env={"PYTHONPATH": "."}))
-
-c["builders"] = []
-c["builders"].append(
-    util.BuilderConfig(name="runtests", workernames=["example-worker"], factory=factory)
-)
-
-
 c["services"] = []
 c["title"] = ini.get("general", "title")
 c["titleURL"] = ini.get("general", "title_url")
@@ -951,7 +936,7 @@ for target in targets:
         factory.addStep(
             StringDownload(
                 name="dlkeybuildpub",
-                deescription="Download public usign key",
+                description="Download public usign key",
                 s=usign_sec_2_pub(usign_key, usign_comment),
                 workerdest="key-build.pub",
                 mode=0o644,
