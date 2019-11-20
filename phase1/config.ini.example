@@ -1,15 +1,16 @@
 [general]
-title = OpenWrt Project
-title_url = http://openwrt.org/
+title = prplWrt Project
+title_url = http://git.prpl.dev/
 workdir = .
 
 [phase1]
-buildbot_url = http://localhost:8010/
+buildbot_url = https://builder.prpl.dev/
 status_bind = tcp:8010:interface=127.0.0.1
 status_user = status
 status_password = secret
 expire = 1209600
 port = 9989
+external_targets_only = true
 cc_version = gt 4.9
 git_ssh = true
 git_ssh_key =
@@ -20,19 +21,26 @@ config_seed = # Seed configuration
 	CONFIG_KERNEL_KALLSYMS=y
 	CONFIG_AUTOREMOVE=y
 
+
 [repo]
-url = https://git.openwrt.org/openwrt/openwrt.git
-branch = master
+url = https://git.prpl.dev/prplwrt/prplwrt.git
+branch = prplwrt-19.07
+
+[external_targets]
+intel_mips = src-git,https://git.prpl.dev/prplwrt/feed-intel.git
+iwlwav = src-git,https://git.prpl.dev/intel/iwlwav.git
+
+[active_profiles]
+rax40 = intel_mips/xrx500
 
 [rsync]
-binary_url = upload@phase1.aparcar.org::data/
-binary_password = secret
+binary_url = user@example.org::data
+binary_password = example1
 source_url = user@example.org::upload-sources
 source_password = example2
 
 [gpg]
 key =
-
 passphrase = secret password
 comment = Unattended build signature
 
@@ -40,8 +48,6 @@ comment = Unattended build signature
 key =
 comment =
 
-[worker 1]
-phase = 1
-name = buildworker-phase1
+[worker worker1]
+name = worker1
 password = secret
-builds = 1

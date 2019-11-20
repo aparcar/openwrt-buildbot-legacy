@@ -184,12 +184,25 @@ targets_available = list(
     )
 )
 
-if not external_targets_only:
-    targets = targets_available
+targets = []
+
+if not ini.has_section("active_profiles"):
+    if not external_targets_only:
+        targets.extend(targets_available)
+    else:
+        targets.extend(
+            list(
+                filter(
+                    lambda t: t.startswith(tuple(external_targets)), targets_available
+                )
+            )
+        )
 else:
-    targets = list(
-        filter(lambda t: t.startswith(tuple(external_targets)), targets_available)
-    )
+    active_profiles = ini.options("active_profiles")
+    for active_profile in active_profiles:
+        targets.append(
+            "{}/{}".format(ini.get("active_profiles", active_profile), active_profile)
+        )
 
 
 c["change_source"] = []
@@ -866,40 +879,55 @@ for target in targets:
             )
         )
 
-    # seed config
-    if config_seed:
+    if len(ts) == 2:
+        # seed config
+        if config_seed:
+            factory.addStep(
+                StringDownload(
+                    name="dlconfigseed",
+                    s=config_seed + "\n",
+                    workerdest=".config",
+                    mode=0o644,
+                )
+            )
+
+        # configure
         factory.addStep(
-            StringDownload(
-                name="dlconfigseed",
-                s=config_seed + "\n",
-                workerdest=".config",
-                mode=0o644,
+            ShellCommand(
+                name="newconfig",
+                description="Seeding .config",
+                command=f"printf 'CONFIG_TARGET_{ts[0]}=y\\nCONFIG_TARGET_{ts[0]}_{ts[1]}=y\\n' >> .config",
             )
         )
-
-    # configure
-    factory.addStep(
-        ShellCommand(
-            name="newconfig",
-            description="Seeding .config",
-            command=f"printf 'CONFIG_TARGET_{ts[0]}=y\\nCONFIG_TARGET_{ts[0]}_{ts[1]}=y\\n' >> .config",
+        factory.addStep(
+            ShellCommand(
+                name="defconfig",
+                description="Populating .config",
+                command=["make", "defconfig"],
+                env=MakeEnv(),
+            )
         )
-    )
+    else:
+        factory.addStep(
+            ShellCommand(
+                name="delconfig",
+                description="Removing .config",
+                command=["rm", "-f", ".config"],
+            )
+        )
+        factory.addStep(
+            ShellCommand(
+                name="gen_config",
+                description=f"Use config generator for {ts[2]}",
+                command=["./scripts/gen_config.sh", ts[2]],
+            )
+        )
 
     factory.addStep(
         ShellCommand(
             name="delbin",
             description="Removing output directory",
             command=["rm", "-rf", "bin/"],
-        )
-    )
-
-    factory.addStep(
-        ShellCommand(
-            name="defconfig",
-            description="Populating .config",
-            command=["make", "defconfig"],
-            env=MakeEnv(),
         )
     )
 
