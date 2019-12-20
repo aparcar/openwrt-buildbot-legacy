@@ -75,8 +75,8 @@ for section in ini.sections():
         }
 
         # Parrallel builds can where the working directory
-        if p["max_builds"] == 1:
-            p["shared_wd"] = True
+        if p["max_builds"] > 1:
+            p["shared_wd"] = False
 
         if p["dl_lock"] and p["dl_lock"] not in NetLocks:
             NetLocks[p["dl_lock"]] = util.MasterLock(p["dl_lock"])
