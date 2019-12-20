@@ -1,24 +1,6 @@
 version: '3'
 
 services:
-  nginx:
-    image: umputun/nginx-le:latest
-    hostname: nginx
-    volumes:
-      - ./nginx/ssl:/etc/nginx/ssl
-      - ./nginx/service.conf:/etc/nginx/service.conf
-      - ./nginx/stream.conf:/etc/nginx/stream.d/stream.conf
-      - ./build/output:/data
-    ports:
-      - "80:80"
-      - "443:443"
-      - '9989:9989'
-    environment:
-      - TZ=America/Chicago
-      - LETSENCRYPT=true
-      - LE_EMAIL=mail@aparcar.org
-      - LE_FQDN=phase1.aparcar.org
-
   rsync-server:
     build:
       context: .
@@ -41,9 +23,11 @@ services:
       BUILDMASTER_PHASE: 1
       BUILDMASTER_CONFIG: ./config.ini
     volumes:
-      - './phase1/config.ini:/master/config.ini'
-      - './build/master-phase1:/master'
       - './phase1:/phase1'
+      - './build/master-phase1:/master'
+    ports:
+      - "127.0.0.1:801l:8010"
+      - "127.0.0.1:9990:9989"
 
   buildworker-phase1:
     build:
