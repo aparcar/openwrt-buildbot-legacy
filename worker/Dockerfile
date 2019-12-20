@@ -20,6 +20,7 @@ RUN apt-get update && \
 	locales \
 	pv \
 	pwgen \
+	python2 \
 	python3 \
 	python3-pip \
 	rsync \
