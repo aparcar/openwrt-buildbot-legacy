@@ -111,6 +111,7 @@ enable_kmod_archive = ini.getboolean("phase1", "enable_kmod_archive", fallback=T
 repo_url = ini.get("repo", "url")
 repo_branch = ini.get("repo", "branch", fallback="master")
 
+
 rsync_bin_url = ini.get("rsync", "binary_url")
 rsync_bin_key = ini.get("rsync", "binary_password")
 rsync_bin_defopts = ["-v", "-4", "--timeout=120"]
@@ -136,15 +137,10 @@ usign_comment = ini.get(
     fallback="untrusted comment: " + repo_branch.replace("-", " ").title() + " key",
 )
 
+profiles_only = ini.getboolean("phase1", "profiles_only", fallback=False)
 
-if ini.has_section("external_targets"):
-    external_targets = ini.options("external_targets")
-else:
-    external_targets = {}
 
-external_targets_only = ini.getboolean(
-    "phase1", "external_targets_only", fallback=False
-)
+builders = {}
 
 source_git = workdir / "source.git"
 source_git.parent.mkdir(parents=True, exist_ok=True)
@@ -156,25 +152,22 @@ if not source_git.is_dir():
 else:
     subprocess.call(["git", "pull"], cwd=source_git)
 
-if external_targets:
-    feeds_conf = (source_git / "feeds.conf.default").read_text()
+source_git.parent.mkdir(parents=True, exist_ok=True)
 
-    for external_target in external_targets:
-        feeds_conf += "{1} {0} {2}\n".format(
-            external_target, *ini.get("external_targets", external_target).split(",")
-        )
+profiles_url = ini.get("phase1", "profiles_url", fallback=None)
 
-    (source_git / "feeds.conf").write_text(feeds_conf)
+if profiles_url:
+    profiles_git = workdir / "profiles.git"
+    if not profiles_git.is_dir():
+        subprocess.run(["git", "clone", "--depth=1", profiles_url, profiles_git])
+    else:
+        subprocess.run(["git", "pull"], cwd=profiles_git)
 
-    subprocess.call(
-        ["scripts/feeds", "update", " ".join(external_targets)], cwd=source_git
-    )
-    subprocess.call(
-        ["scripts/feeds", "install", " ".join(external_targets)], cwd=source_git
-    )
+    for profile in profiles_git.rglob("*.yml"):
+        builders[f"Profile: {profile.stem}"] = yaml.safe_load(profile.read_text())
 
-targets_available = list(
-    map(
+if not profiles_only:
+    for target in map(
         lambda t: t.split()[0],
         subprocess.run(
             [scripts_dir + "/dumpinfo.pl", "targets"],
@@ -182,29 +175,13 @@ targets_available = list(
             capture_output=True,
             text=True,
         ).stdout.splitlines(),
-    )
-)
+    ):
+        builders[f"Target: {t}"] = {
+            "target": target.split("/")[0],
+            "subtarget": target.split("/")[1],
+        }
 
-targets = []
-
-if not ini.has_section("active_profiles"):
-    if not external_targets_only:
-        targets.extend(targets_available)
-    else:
-        targets.extend(
-            list(
-                filter(
-                    lambda t: t.startswith(tuple(external_targets)), targets_available
-                )
-            )
-        )
-else:
-    active_profiles = ini.options("active_profiles")
-    for active_profile in active_profiles:
-        targets.append(
-            "{}/{}".format(ini.get("active_profiles", active_profile), active_profile)
-        )
-
+print(builders)
 
 c["change_source"] = []
 c["change_source"].append(
@@ -222,10 +199,12 @@ c["schedulers"].append(
         name="all",
         change_filter=util.ChangeFilter(branch=repo_branch),
         treeStableTimer=60,
-        builderNames=targets,
+        builderNames=list(builders.keys()),
     )
 )
-c["schedulers"].append(schedulers.ForceScheduler(name="force", builderNames=targets))
+c["schedulers"].append(
+    schedulers.ForceScheduler(name="force", builderNames=list(builders.keys()))
+)
 c["services"] = []
 c["title"] = ini.get("general", "title")
 c["titleURL"] = ini.get("general", "title_url")
@@ -517,8 +496,8 @@ workerNames = []
 for worker in c["workers"]:
     workerNames.append(worker.workername)
 
-for target in targets:
-    ts = target.split("/")
+for builder, p in builders.items():
+    print(f"{builder} {p}")
 
     factory = BuildFactory()
 
@@ -759,12 +738,6 @@ for target in targets:
         )
     )
 
-    factory.addStep(
-        ShellCommand(
-            name="rmtmp", description="Remove tmp folder", command=["rm", "-rf", "tmp/"]
-        )
-    )
-
     # feed
     # 	factory.addStep(ShellCommand(
     # 		name = "feedsconf",
@@ -798,12 +771,16 @@ for target in targets:
         )
     )
 
-    if external_targets:
+    for f in p.get("feeds", []):
         factory.addStep(
-            FileDownload(
-                name="Transfer master feeds.conf to worker feeds.conf.default",
-                mastersrc=source_git / "feeds.conf",
-                workerdest="feeds.conf.default",
+            ShellCommand(
+                name=f'Add feed {f["name"]}',
+                command="echo '{} {} {};{}' >> feeds.conf.default".format(
+                    f.get("method", "src-git"),
+                    f["name"],
+                    f["uri"],
+                    f.get("branch", "master"),
+                ),
                 haltOnFailure=True,
             )
         )
@@ -827,6 +804,15 @@ for target in targets:
                 haltOnFailure=True,
             )
         )
+
+    factory.addStep(
+        ShellCommand(
+            name="debugprintfeeds",
+            description="Print feeds.conf",
+            command=["cat", "feeds.conf", "feeds.conf.default"],
+            env=MakeEnv(),
+        )
+    )
 
     # feed
     factory.addStep(
@@ -861,83 +847,133 @@ for target in targets:
         )
 
     # feed
-    factory.addStep(
-        ShellCommand(
-            name="installfeeds",
-            description="Installing feeds",
-            command=["./scripts/feeds", "install", "-a"],
-            env=MakeEnv(tryccache=True),
-            haltOnFailure=True,
-        )
-    )
-    for external_target in external_targets:
+    if not p.get("packages"):
         factory.addStep(
             ShellCommand(
-                name=f"Install external target {external_target}",
-                command=["./scripts/feeds", "install", external_target],
+                name="installfeeds",
+                description="Installing feeds",
+                command=["./scripts/feeds", "install", "-a"],
                 env=MakeEnv(tryccache=True),
                 haltOnFailure=True,
             )
         )
 
-    if len(ts) == 2:
-        # seed config
-        if config_seed:
+        for feed in p.get("feeds", []):
             factory.addStep(
-                StringDownload(
-                    name="dlconfigseed",
-                    s=config_seed + "\n",
-                    workerdest=".config",
-                    mode=0o644,
+                ShellCommand(
+                    name=f'Force install packages from {feed["name"]}',
+                    command=[
+                        "./scripts/feeds",
+                        "install",
+                        "-a",
+                        "-f",
+                        "-p",
+                        feed["name"],
+                    ],
+                    haltOnFailure=True,
                 )
             )
 
-        # configure
-        factory.addStep(
-            ShellCommand(
-                name="newconfig",
-                description="Seeding .config",
-                command=f"printf 'CONFIG_TARGET_{ts[0]}=y\\nCONFIG_TARGET_{ts[0]}_{ts[1]}=y\\n' >> .config",
-            )
-        )
-        factory.addStep(
-            ShellCommand(
-                name="defconfig",
-                description="Populating .config",
-                command=["make", "defconfig"],
-                env=MakeEnv(),
-            )
-        )
     else:
         factory.addStep(
             ShellCommand(
-                name="delconfig",
-                description="Removing .config",
-                command=["rm", "-f", ".config"],
-            )
-        )
-        factory.addStep(
-            ShellCommand(
-                name="gen_config",
-                description=f"Use config generator for {ts[2]}",
-                command=["./scripts/gen_config.sh", ts[2]],
+                name=f"installcustompackages",
+                description="Install custom packages",
+                command=["./scripts/feeds", "install", *p["packages"]],
+                env=MakeEnv(tryccache=True),
+                haltOnFailure=True,
             )
         )
 
+    if p.get("external_target"):
+        factory.addStep(
+            ShellCommand(
+                name=f"Install external target {p['target']}",
+                command=["./scripts/feeds", "install", p["target"]],
+                env=MakeEnv(tryccache=True),
+                haltOnFailure=True,
+            )
+        )
+
+    # generate .config
+
+    ## start with config seed
+    config_output = config_seed + "\n"
+
+    ## set target/subtarget
+    config_output += f"CONFIG_TARGET_{p['target']}=y\nCONFIG_TARGET_{p['target']}_{p['subtarget']}=y\n"
+
+    ## set profile if set
+    if "profile" in p:
+        config_output += (
+            f"CONFIG_TARGET_{p['target']}_{p['subtarget']}_DEVICE_{p['profile']}=y\n"
+        )
+
+    ## add optional diffconfig from profile
+    config_output += f"{p.get('diffconfig', '')}"
+
+    ## add optional packages to be installed
+    for package in p.get("packages", []):
+        config_output += f"CONFIG_PACKAGE_{package}=y\n"
+
+    factory.addStep(
+        StringDownload(
+            name="writeconfig",
+            description="Write .config",
+            s=config_output,
+            workerdest=".config",
+            mode=0o644,
+        )
+    )
+
     factory.addStep(
         ShellCommand(
-            name="delbin",
+            name="printconfig",
+            description="Print .config",
+            command=["cat", ".config"],
+            env=MakeEnv(),
+        )
+    )
+
+    factory.addStep(
+        ShellCommand(
+            name="rmtmpfolder",
+            description="Remove tmp folder",
+            command=["rm", "-rf", "tmp/"],
+        )
+    )
+
+    factory.addStep(
+        ShellCommand(
+            name="defconfig",
+            description="Populating .config",
+            command=["make", "defconfig"],
+            env=MakeEnv(),
+        )
+    )
+
+    factory.addStep(
+        ShellCommand(
+            name="debugprintconfig",
+            description="Print .config",
+            command=["cat", ".config"],
+            env=MakeEnv(),
+        )
+    )
+
+    factory.addStep(
+        ShellCommand(
+            name="rmbinfolder",
             description="Removing output directory",
             command=["rm", "-rf", "bin/"],
         )
     )
 
-    # check arch
     factory.addStep(
         ShellCommand(
             name="checkarch",
             description="Checking architecture",
-            command=["grep", "-sq", "CONFIG_TARGET_%s=y" % (ts[0]), ".config"],
+            command=["grep", "-sq", f"CONFIG_TARGET_{p['target']}=y", ".config"],
             logEnviron=False,
             want_stdout=False,
             want_stderr=False,
@@ -945,7 +981,6 @@ for target in targets:
         )
     )
 
-    # find libc suffix
     factory.addStep(
         SetPropertyFromCommand(
             name="libc",
@@ -960,7 +995,6 @@ for target in targets:
         )
     )
 
-    # install build key
     if usign_key:
         factory.addStep(
             StringDownload(
@@ -972,7 +1006,6 @@ for target in targets:
             )
         )
 
-    # prepare dl
     factory.addStep(
         ShellCommand(
             name="dldir",
@@ -983,7 +1016,6 @@ for target in targets:
         )
     )
 
-    # prepare tar
     factory.addStep(
         ShellCommand(
             name="dltar",
@@ -999,7 +1031,6 @@ for target in targets:
         )
     )
 
-    # populate dl
     factory.addStep(
         ShellCommand(
             name="dlrun",
@@ -1073,7 +1104,6 @@ for target in targets:
         )
     )
 
-    # find kernel version
     factory.addStep(
         SetPropertyFromCommand(
             name="kernelversion",
@@ -1101,7 +1131,7 @@ for target in targets:
                 Interpolate("-j%(kw:jobs)s", jobs=get_num_jobs),
                 "package/compile",
                 "V=s",
-                "IGNORE_ERRORS=n m",
+                "IGNORE_ERRORS=y n m",
                 "BUILD_LOG=1",
             ],
             env=MakeEnv(),
@@ -1144,8 +1174,6 @@ for target in targets:
 
     if enable_kmod_archive:
         # embed kmod repository. Must happen before 'images'
-
-        # find rootfs staging directory
         factory.addStep(
             SetPropertyFromCommand(
                 name="stageroot",
@@ -1223,8 +1251,8 @@ for target in targets:
                     "-p",
                     Interpolate(
                         "bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/kmods/%(prop:kernelversion)s",
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                     ),
                 ],
                 haltOnFailure=True,
@@ -1242,13 +1270,13 @@ for target in targets:
                     "-va",
                     Interpolate(
                         "bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/packages/",
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                     ),
                     Interpolate(
                         "bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/kmods/%(prop:kernelversion)s/",
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                     ),
                 ],
                 haltOnFailure=True,
@@ -1267,8 +1295,8 @@ for target in targets:
                     "CONFIG_SIGNED_PACKAGES=",
                     Interpolate(
                         "PACKAGE_SUBDIRS=bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/kmods/%(prop:kernelversion)s/",
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                     ),
                 ],
                 env=MakeEnv(),
@@ -1293,8 +1321,8 @@ for target in targets:
                 description="Packing files to sign",
                 command=Interpolate(
                     "find bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/ bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/kmods/ -mindepth 1 -maxdepth 2 -type f -name sha256sums -print0 -or -name Packages -print0 | xargs -0 tar -czf sign.tar.gz",
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                 ),
                 haltOnFailure=True,
             )
@@ -1303,7 +1331,8 @@ for target in targets:
         factory.addStep(
             FileUpload(
                 workersrc="sign.tar.gz",
-                masterdest="%s/signing/%s.%s.tar.gz" % (work_dir, ts[0], ts[1]),
+                masterdest="%s/signing/%s.%s.tar.gz"
+                % (work_dir, p["target"], p["subtarget"]),
                 haltOnFailure=True,
             )
         )
@@ -1314,7 +1343,7 @@ for target in targets:
                 description="Signing files",
                 command=[
                     "%s/signall.sh" % (scripts_dir),
-                    "%s/signing/%s.%s.tar.gz" % (work_dir, ts[0], ts[1]),
+                    "%s/signing/%s.%s.tar.gz" % (work_dir, p["target"], p["subtarget"]),
                 ],
                 env={"CONFIG_INI": getenv("BUILDMASTER_CONFIG", "./config.ini")},
                 haltOnFailure=True,
@@ -1324,7 +1353,8 @@ for target in targets:
         factory.addStep(
             FileDownload(
                 name="dlsigntargz",
-                mastersrc="%s/signing/%s.%s.tar.gz" % (work_dir, ts[0], ts[1]),
+                mastersrc="%s/signing/%s.%s.tar.gz"
+                % (work_dir, p["target"], p["subtarget"]),
                 workerdest="sign.tar.gz",
                 haltOnFailure=True,
             )
@@ -1349,8 +1379,8 @@ for target in targets:
                 "-p",
                 Interpolate(
                     "tmp/upload/%(kw:prefix)stargets/%(kw:target)s/%(kw:subtarget)s",
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                     prefix=GetVersionPrefix,
                 ),
             ],
@@ -1386,8 +1416,8 @@ for target in targets:
                     "-p",
                     Interpolate(
                         "tmp/upload/%(kw:prefix)stargets/%(kw:target)s/%(kw:subtarget)s/kmods/%(prop:kernelversion)s",
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                         prefix=GetVersionPrefix,
                     ),
                 ],
@@ -1419,8 +1449,8 @@ for target in targets:
                 Interpolate(
                     "%(kw:rsyncbinurl)s/%(kw:prefix)stargets/%(kw:target)s/%(kw:subtarget)s/sha256sums",
                     rsyncbinurl=rsync_bin_url,
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                     prefix=GetVersionPrefix,
                 ),
                 "target-sha256sums",
@@ -1452,8 +1482,8 @@ for target in targets:
                 "target-sha256sums",
                 Interpolate(
                     "bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/sha256sums",
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                 ),
                 "rsynclist",
             ],
@@ -1480,21 +1510,21 @@ for target in targets:
                 "--exclude=/kmods/",
                 "--files-from=rsynclist",
                 "--delay-updates",
-                "--partial-dir=.~tmp~%s~%s" % (ts[0], ts[1]),
+                "--partial-dir=.~tmp~%s~%s" % (p["target"], p["subtarget"]),
             ]
             + rsync_bin_defopts
             + [
                 "-a",
                 Interpolate(
                     "bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/",
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                 ),
                 Interpolate(
                     "%(kw:rsyncbinurl)s/%(kw:prefix)stargets/%(kw:target)s/%(kw:subtarget)s/",
                     rsyncbinurl=rsync_bin_url,
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                     prefix=GetVersionPrefix,
                 ),
             ],
@@ -1516,21 +1546,21 @@ for target in targets:
                 "--existing",
                 "--ignore-existing",
                 "--delay-updates",
-                "--partial-dir=.~tmp~%s~%s" % (ts[0], ts[1]),
+                "--partial-dir=.~tmp~%s~%s" % (p["target"], p["subtarget"]),
             ]
             + rsync_bin_defopts
             + [
                 "-a",
                 Interpolate(
                     "bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/",
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                 ),
                 Interpolate(
                     "%(kw:rsyncbinurl)s/%(kw:prefix)stargets/%(kw:target)s/%(kw:subtarget)s/",
                     rsyncbinurl=rsync_bin_url,
-                    target=ts[0],
-                    subtarget=ts[1],
+                    target=p["target"],
+                    subtarget=p["subtarget"],
                     prefix=GetVersionPrefix,
                 ),
             ],
@@ -1549,21 +1579,21 @@ for target in targets:
                     "../rsync.sh",
                     "--delete",
                     "--delay-updates",
-                    "--partial-dir=.~tmp~%s~%s" % (ts[0], ts[1]),
+                    "--partial-dir=.~tmp~%s~%s" % (p["target"], p["subtarget"]),
                 ]
                 + rsync_bin_defopts
                 + [
                     "-a",
                     Interpolate(
                         "bin/targets/%(kw:target)s/%(kw:subtarget)s%(prop:libc)s/kmods/%(prop:kernelversion)s/",
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                     ),
                     Interpolate(
                         "%(kw:rsyncbinurl)s/%(kw:prefix)stargets/%(kw:target)s/%(kw:subtarget)s/kmods/%(prop:kernelversion)s/",
                         rsyncbinurl=rsync_bin_url,
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                         prefix=GetVersionPrefix,
                     ),
                 ],
@@ -1597,8 +1627,8 @@ for target in targets:
                 + [
                     Interpolate(
                         "--partial-dir=.~tmp~%(kw:target)s~%(kw:subtarget)s~%(prop:workername)s",
-                        target=ts[0],
-                        subtarget=ts[1],
+                        target=p["target"],
+                        subtarget=p["subtarget"],
                     ),
                     "-a",
                     "dl/",
@@ -1619,7 +1649,7 @@ for target in targets:
                     "../rsync.sh",
                     "--delete",
                     "--delay-updates",
-                    "--partial-dir=.~tmp~%s~%s" % (ts[0], ts[1]),
+                    "--partial-dir=.~tmp~%s~%s" % (p["target"], p["subtarget"]),
                     "-a",
                 ]
                 + rsync_bin_defopts
@@ -1640,11 +1670,14 @@ for target in targets:
                     "../rsync.sh",
                     "--delete",
                     "--delay-updates",
-                    "--partial-dir=.~tmp~%s~%s" % (ts[0], ts[1]),
+                    "--partial-dir=.~tmp~%s~%s" % (p["target"], p["subtarget"]),
                     "-az",
                 ]
                 + rsync_bin_defopts
-                + ["logs/", "%s/logs/%s/%s/" % (rsync_bin_url, ts[0], ts[1])],
+                + [
+                    "logs/",
+                    "%s/logs/%s/%s/" % (rsync_bin_url, p["target"], p["subtarget"]),
+                ],
                 env={"RSYNC_PASSWORD": rsync_bin_key},
                 haltOnFailure=False,
                 alwaysRun=True,
@@ -1681,7 +1714,7 @@ for target in targets:
 
     c["builders"].append(
         BuilderConfig(
-            name=target,
+            name=builder,
             workernames=workerNames,
             factory=factory,
             nextBuild=GetNextBuild,
