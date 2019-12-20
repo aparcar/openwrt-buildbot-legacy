@@ -21,13 +21,14 @@ import base64
 import os
 import re
 import subprocess
+import yaml
 
 # Load .ini config file so it is easier to configure the buildbot
 ini = ConfigParser()
 ini.read(getenv("BUILDMASTER_CONFIG", "./config.ini"))
 c = BuildmasterConfig = {}
 
-c["buildbotNetUsageData"] = "full"
+c["buildbotNetUsageData"] = None
 c["configurators"] = [
     util.JanitorConfigurator(logHorizon=timedelta(weeks=4), hour=12, dayOfWeek=6)
 ]
