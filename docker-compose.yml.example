@@ -1,0 +1,44 @@
+version: '3'
+
+services:
+  rsync-server:
+    build:
+      context: .
+      dockerfile: ./rsync/Dockerfile
+    image: openwrtorg/rsync-server:latest
+    environment:
+      SHARE_USER: upload
+      SHARE_PASSWORD: secret
+    volumes:
+      - './build/output:/data'
+    ports:
+      - "873:873"
+
+  buildmaster-phase1:
+    build:
+      context: .
+      dockerfile: master/Dockerfile
+    image: openwrtorg/buildmaster:latest
+    environment:
+      BUILDMASTER_PHASE: 1
+      BUILDMASTER_CONFIG: ./config.ini
+    volumes:
+      - './phase1:/phase1'
+      - './build/master-phase1:/master'
+    ports:
+      - "127.0.0.1:801l:8010"
+      - "127.0.0.1:9990:9989"
+
+  buildworker-phase1:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: openwrtorg/buildworker:latest
+    environment:
+      BUILDWORKER_MASTER: buildmaster-phase1:9989
+      BUILDWORKER_NAME: buildworker-phase1
+      BUILDWORKER_PASSWORD: secret
+    links:
+      - 'buildmaster-phase1'
+    volumes:
+      - './build/worker-phase1:/builder'
