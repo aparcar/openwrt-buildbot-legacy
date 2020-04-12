@@ -18,7 +18,7 @@ services:
     build:
       context: ../
       dockerfile: docker/buildmaster/Dockerfile
-    image: buildmaster:latest
+    image: openwrtorg/buildmaster:latest
     restart: always
     cpuset: '0'
     environment:
@@ -37,7 +37,7 @@ services:
     build:
       context: ../
       dockerfile: docker/buildmaster/Dockerfile
-    image: buildmaster:latest
+    image: openwrtorg/buildmaster:latest
     restart: always
     cpuset: '0'
     environment:
@@ -56,7 +56,7 @@ services:
     build:
       context: ../
       dockerfile: docker/buildslave/Dockerfile
-    image: buildslave:latest
+    image: openwrtorg/buildslave:latest
     restart: always
     cpuset: 1-3
     environment:
@@ -75,7 +75,7 @@ services:
     build:
       context: ../
       dockerfile: docker/buildslave/Dockerfile
-    image: buildslave:latest
+    image: openwrtorg/buildslave:latest
     restart: always
     cpuset: 1-3
     environment:
