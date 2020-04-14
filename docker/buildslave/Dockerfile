@@ -30,7 +30,8 @@ RUN echo 'deb http://deb.debian.org/debian testing main' \
 		ccache \
 		rsync && \
 	apt-get install -t testing -y \
-		buildbot-worker && \
+		buildbot-worker \
+		python3-openssl && \
 	apt-get clean && \
 	localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 
