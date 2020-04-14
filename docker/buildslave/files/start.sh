@@ -16,10 +16,11 @@ rm -f /builder/buildbot.tac
     "$BUILDSLAVE_MASTER" "$BUILDSLAVE_NAME" "$BUILDSLAVE_PASSWORD"
 
 if [ "$BUILDSLAVE_TLS" = 1 ]; then
-	sed -i \
-		-e 's#(buildmaster_host, port, #(None, None, #' \
-		-e 's#allow_shutdown=allow_shutdown#&, connection_string="TLS:%s:%d:trustRoots=/certs" %(buildmaster_host, port)#' \
-		/builder/buildbot.tac
+	/usr/bin/buildbot-worker create-worker --force --umask="0o22" --use-tls /builder \
+	    "$BUILDSLAVE_MASTER" "$BUILDSLAVE_NAME" "$BUILDSLAVE_PASSWORD"
+else
+	/usr/bin/buildbot-worker create-worker --force --umask="0o22" /builder \
+	    "$BUILDSLAVE_MASTER" "$BUILDSLAVE_NAME" "$BUILDSLAVE_PASSWORD"
 fi
 
 echo "$BUILDSLAVE_ADMIN" > /builder/info/admin
