@@ -2,6 +2,7 @@
 
 case "${1:-start}" in
 	reconfig)
+		buildbot upgrade-master /master
 		exec buildbot reconfig /master
 	;;
 	start)
@@ -20,6 +21,7 @@ case "${1:-start}" in
 		unset BUILDMASTER_PHASE
 
 		rm -f /master/twistd.pid
+		buildbot upgrade-master /master
 		exec buildbot start --nodaemon /master
 	;;
 	/*)

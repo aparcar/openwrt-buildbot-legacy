@@ -32,7 +32,8 @@ RUN pip3 install \
 	"buildbot-console-view==2.7.0" \
 	"buildbot-grid-view==2.7.0" \
 	"pyOpenSSL" \
-	"service_identity"
+	"service_identity" \
+	"psycopg2-binary"
 
 ENV LANG=en_US.utf8
 
