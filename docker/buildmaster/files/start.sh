@@ -2,7 +2,8 @@
 
 case "${1:-start}" in
 	reconfig)
-		exec /usr/bin/buildbot reconfig /master
+		buildbot upgrade-master /master
+		exec buildbot reconfig /master
 	;;
 	start)
 		case "${BUILDMASTER_PHASE:-1}" in
@@ -15,12 +16,13 @@ case "${1:-start}" in
 			;;
 		esac
 
-		/usr/bin/buildbot create-master --config=/phase${BUILDMASTER_PHASE:-1}/master.cfg /master
+		buildbot create-master --config=/phase${BUILDMASTER_PHASE:-1}/master.cfg /master
 
 		unset BUILDMASTER_PHASE
 
 		rm -f /master/twistd.pid
-		exec /usr/bin/buildbot start --nodaemon /master
+		buildbot upgrade-master /master
+		exec buildbot start --nodaemon /master
 	;;
 	/*)
 		exec "$@"
