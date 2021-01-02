@@ -1,0 +1,36 @@
+version: "2"
+
+services:
+  rsync-server:
+    image: aparcar/rsync:latest
+    restart: always
+    cpuset: "0"
+    environment:
+      - SHARE_USER=upload
+      - SHARE_PASSWORD=secret
+    ports:
+      - "873:873"
+    volumes:
+      - "./output:/data"
+
+  buildmaster-phase1:
+    image: aparcar/buildmaster:latest
+    restart: always
+    ports:
+      - "127.0.0.1:8010:8010"
+      - "127.0.0.1:19989:9989"
+    volumes:
+      - "./phase1-master.cfg:/var/lib/buildbot/master.cfg:ro"
+      - "./scripts/:/var/lib/buildbot/scripts/:ro"
+      - "./config.ini:/var/lib/buildbot/config.ini:ro"
+
+  buildmaster-phase2:
+    image: aparcar/buildmaster:latest
+    restart: always
+    ports:
+      - "127.0.0.1:8011:8010"
+      - "127.0.0.1:19990:9989"
+    volumes:
+      - "./phase2-master.cfg:/var/lib/buildbot/master.cfg:ro"
+      - "./scripts/:/var/lib/buildbot/scripts/:ro"
+      - "./config.ini:/var/lib/buildbot/config.ini:ro"

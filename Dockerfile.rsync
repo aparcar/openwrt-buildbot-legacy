@@ -1,0 +1,13 @@
+FROM alpine
+
+COPY rsync-entry.sh /entry.sh
+
+RUN apk add rsync
+
+RUN mkdir -p /data
+RUN chmod 0755 /entry.sh
+
+EXPOSE 873
+VOLUME [ "/data" ]
+ENTRYPOINT [ "/entry.sh" ]
+HEALTHCHECK CMD xargs kill -0 < /tmp/rsyncd.pid

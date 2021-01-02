@@ -1,0 +1,26 @@
+FROM buildbot/buildbot-worker:v2.10.0
+
+USER root
+
+RUN apt-get update && \
+        apt-get install -y \
+                build-essential \
+                ccache \
+                curl \
+                gawk \
+                gcc-multilib \
+                git-core \
+                gpg \
+                libncurses-dev \
+                locales \
+                pv \
+                pwgen \
+                python3 \
+                rsync \
+                signify-openbsd \
+                subversion \
+                unzip \
+                wget && \
+        apt-get clean
+
+USER buildbot

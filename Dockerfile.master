@@ -1,0 +1,12 @@
+FROM buildbot/buildbot-master:v2.10.0
+
+RUN apk add \
+	    bash \
+	    coreutils \
+	    gnupg \
+	    make \
+	    ncurses-dev \
+	    outils-signify \
+	    perl
+
+VOLUME [ "/var/lib/buildbot" ]

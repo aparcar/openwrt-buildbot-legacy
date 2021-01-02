@@ -1,7 +1,12 @@
 #!/bin/sh
 
-docker build -t openwrtorg/buildmaster -f docker/buildmaster/Dockerfile .
-docker push openwrtorg/buildmaster
+DOCKER_USER=aparcar
 
-docker build -t openwrtorg/buildslave -f docker/buildslave/Dockerfile .
-docker push openwrtorg/buildslave
+docker build -t "$DOCKER_USER/buildmaster" -f docker/Dockerfile.master .
+docker push "$DOCKER_USER/buildmaster"
+
+docker build -t "$DOCKER_USER/buildworker" -f docker/Dockerfile.worker .
+docker push "$DOCKER_USER/buildworker"
+
+docker build -t "$DOCKER_USER/rsync" -f docker/Dockerfile.rsync .
+docker push "$DOCKER_USER/rsync"
