@@ -16,6 +16,7 @@ RUN apt-get update && \
                 pv \
                 pwgen \
                 python3 \
+                qemu-utils \
                 rsync \
                 signify-openbsd \
                 subversion \
